@@ -212,6 +212,10 @@ function! Remove_prefixes(value)
   return substitute(a:value, '^\(<\|>\)', '', '')
 endfunction
 
+function! PrintNode(message, n)
+  call LogMessage('INFO', a:message . ' node '. a:n.type .' start: '. a:n.s . ', end: ' . a:n.e)
+endfunction
+
 function! s:build_fold_data() abort
   let lang = s:ft_to_lang()
   if empty(lang)
@@ -275,6 +279,7 @@ function! s:build_fold_data() abort
   let stack = []
 
   for n in nodes
+    call PrintNode('--> checking', n)
     " Pop stack until current node is nested inside top of stack
     while !empty(stack)
       let top = stack[-1]
@@ -283,11 +288,13 @@ function! s:build_fold_data() abort
         break
       endif
       " otherwise pop top (we've left that ancestor)
-      call remove(stack, -1)
+      let removed = remove(stack, -1)
+      call PrintNode('  removed', removed)
     endwhile
 
     " Depth is stack size + 1 (top-level nodes have depth 1)
     let depth = len(stack) + 1
+    call LogMessage('INFO', '--> stack depth: '. depth)
 
     " Record fold level for lines inside the node (start+1 .. end inclusive)
     let sline = n.s + 1
@@ -311,23 +318,34 @@ function! s:build_fold_data() abort
         if l == eline
           let prefix = '<'
         endif
+        call LogMessage('INFO', 'setting level: ' . prefix . depth . ' for key: ' . key)
         let s:fold_levels[key] = prefix . depth
       endif
     endfor
 
     " push current node onto stack as potential ancestor for following nodes
+    call PrintNode('add stack', n)
     call add(stack, n)
   endfor
 
   let values = uniq(sort(values(map(copy(s:fold_levels), 'Remove_prefixes(v:val)')), 'N'))
+  let p = 1
+  call LogMessage('INFO', '   showing values')
+  for v in values
+    call LogMessage('INFO', '      showing val: ' . v . ' line ' . p)
+    let p += 1
+  endfor
 
   for key in keys(s:fold_levels)
     let level = s:fold_levels[key]
+    call LogMessage('INFO', 'showing level: ' . level . ' for key: ' . key)
     let contains_init_fold = stridx(level, '>') == 0 
     let contains_end_fold = stridx(level, '<') == 0 
     if contains_init_fold || contains_end_fold
       let level = Remove_prefixes(level)
     endif
+    call LogMessage('INFO', 'searching for level: ' . level)
+    let flevel = index(values, level) + 1
     let prefix = ''
     if contains_init_fold
       let prefix = '>'
@@ -335,7 +353,8 @@ function! s:build_fold_data() abort
     if contains_end_fold
       let prefix = '<'
     endif
-    let s:fold_levels[key] = prefix . (index(values, level) + 1)   
+    call LogMessage('INFO', 'showing final level: ' . prefix . flevel . ' for key: ' . key)
+    let s:fold_levels[key] = prefix . flevel
   endfor
 
   " Save to buffer-local map for foldexpr to consult
