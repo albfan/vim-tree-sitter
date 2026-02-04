@@ -1,26 +1,3 @@
-" plugin/ts_helper.vim - Vimscript frontend for the Python tree-sitter helper (synchronous)
-" Folding algorithm updated to produce minimal fold levels using nesting (stack) logic.
-" Per-language default fold node types removed. Use g:ts_helper_fold_node_types to configure.
-" Place this file and ts_helper.py in the same plugin directory.
-" Optional globals:
-"   let g:ts_helper_py = '/full/path/to/ts_helper.py'
-"   let g:ts_helper_filetype_map = {'py': 'python', 'js': 'javascript'}
-"   let g:ts_helper_auto_folds = 1
-"   let g:ts_helper_fold_node_types = {}
-
-if exists('g:loaded_ts_helper_plugin')
-  finish
-endif
-let g:loaded_ts_helper_plugin = 1
-
-" helper detection: default to helper file next to this script
-let s:script_dir = expand('<sfile>:p:h')
-if exists('g:ts_helper_py') && !empty(g:ts_helper_py)
-  let s:helper_py = g:ts_helper_py
-else
-  let s:helper_py = s:script_dir . '/ts_helper.py'
-endif
-
 " default filetype -> tree-sitter language map; override with g:ts_helper_filetype_map
 let s:default_map = {
       \ 'py': 'python',
@@ -36,6 +13,7 @@ let s:default_map = {
       \ 'go': 'go',
       \ 'yaml': 'yaml',
       \ 'yml': 'yaml',
+      \ 'vala': 'vala',
       \ }
 
 function! s:ft_to_lang() abort
@@ -59,7 +37,7 @@ endfunction
 
 " Helper: build command list (list form) and string form for systemlist fallback
 function! s:build_cmd_list(lang, cmdname, args_string) abort
-  let parts = ['python3', s:helper_py, '--lang', a:lang, a:cmdname]
+  let parts = ['python3', g:ts_helper_py, '--lang', a:lang, a:cmdname]
   if a:args_string !=# ''
     let args = split(a:args_string)
     call extend(parts, args)
@@ -127,11 +105,130 @@ function! s:buf_text() abort
   return join(getbufline('%', 1, '$'), "\n")
 endfunction
 
+function! OnFoldAction(command)
+  execute 'normal!' a:command
+  call treesitter#show_fold_level()
+endfunction
+
+function! treesitter#show_fold_level()
+  let wid = win_getid()
+  let fold_preview = 0
+  if !exists('b:fold_preview') || bufnr(b:fold_preview) == -1 || bufwinnr(b:fold_preview) == -1
+    "TODO: Is not reusing existing buffer
+    vnew
+    setlocal buftype=nofile
+    setlocal bufhidden=wipe
+    setlocal noswapfile
+    "setlocal nomodifiable
+    set cursorline
+    set cursorbind
+    "scrollbind, no resize, allow to close without save
+    vertical resize g:fold_preview_width
+    let fold_preview = bufnr('')
+    call win_gotoid(wid)
+    let b:fold_preview = fold_preview
+    set cursorbind
+    autocmd OptionSet wrap call treesitter#show_fold_level()
+    nnoremap <silent> za :call OnFoldAction('za')<CR>
+    nnoremap <silent> zA :call OnFoldAction('zA')<CR>
+    nnoremap <silent> zr :call OnFoldAction('zr')<CR>
+    nnoremap <silent> zR :call OnFoldAction('zR')<CR>
+    nnoremap <silent> zm :call OnFoldAction('zm')<CR>
+    nnoremap <silent> zM :call OnFoldAction('zM')<CR>
+    nnoremap <silent> zc :call OnFoldAction('zc')<CR>
+    nnoremap <silent> zC :call OnFoldAction('zC')<CR>
+    nnoremap <silent> zo :call OnFoldAction('zo')<CR>
+    nnoremap <silent> zO :call OnFoldAction('zO')<CR>
+    nnoremap <silent> zx :call OnFoldAction('zx')<CR>
+    nnoremap <silent> zX :call OnFoldAction('zX')<CR>
+    nnoremap <silent> zv :call OnFoldAction('zv')<CR>
+  else
+    let fold_preview = b:fold_preview
+  endif
+  let fold_func = substitute(&foldexpr, '\s*(\s*v:lnum\s*)\s*', '','')
+  if exists('b:fold_func')
+    let fold_func = b:fold_func
+  endif
+  call s:fill_buffer_with_fold_level(fold_preview, fold_func)
+endfunction
+
+function! s:fill_buffer_with_fold_level(b, f)
+  call deletebufline(a:b, 1, '$')
+  execute "vertical " . bufwinnr(a:b) . "resize " . g:fold_preview_width
+
+  let win_width = winwidth(0) - &numberwidth - &foldcolumn - &signcolumn
+
+  let plnum = 1
+  for lnum in range(1, line('$'))
+    let text = getline(lnum)
+    let display_width = max([strdisplaywidth(text), 1])
+    let n_screenlines = 1
+    if &wrap
+      let n_screenlines = max([1, float2nr(ceil(display_width * 1.0 / win_width))])
+    endif
+
+    let level = eval(a:f . '(lnum)')
+    let foldclosed = foldclosed(lnum)
+    if foldclosed == -1 || foldclosed == lnum
+      "call setbufline(a:b, plnum, lnum . " " .printf("%2s", level) . ": " .  foldlevel(lnum) .  " " . foldclosed(lnum). "; ". YamlFoldsLine2(lnum) )
+      call setbufline(a:b, plnum, lnum . " level: " .printf("%2s", level) . ", foldlevel: " .  foldlevel(lnum) .  ", foldclosed: " . foldclosed(lnum) )
+      let plnum += 1
+    endif
+    if foldclosed == -1
+      for lnum in range(2, n_screenlines)
+        call setbufline(a:b, plnum, "")
+        let plnum += 1
+      endfor
+    endif
+  endfor
+endfunction
+
+function! s:render_node(node, indent) abort
+  if type(a:node) == type({})
+    let sp = get(a:node, 'start_point', [0,0])
+    let ep = get(a:node, 'end_point', [0,0])
+    let t = printf('%s%s [%d:%d - %d:%d] %s',
+          \ repeat(' ', a:indent),
+          \ get(a:node, 'type', '<unknown>'),
+          \ sp[0] + 1,
+          \ sp[1],
+          \ ep[0] + 1,
+          \ ep[1],
+          \ get(a:node, 'text', ''))
+    let lines = [t]
+    if has_key(a:node, 'children')
+      for child in a:node.children
+        let lines += s:render_node(child, a:indent + 1)
+      endfor
+    endif
+    return lines
+  endif
+  return []
+endfunction
+
+let s:counter = 1
+
+function! s:transform_for_tree(dict)
+  let a:dict['id'] = s:counter
+  let s:counter += 1
+
+  for key in keys(a:dict)
+    let value = a:dict[key]
+    if key == "children" && type(value) == type([])
+      for item in value
+        call s:transform_for_tree(item)
+      endfor
+    elseif key == "type"
+      let a:dict['name'] = value
+    endif
+  endfor
+endfunction
+
 " ------------------------
 " AST display & selection (synchronous)
 " ------------------------
 
-function! s:show_ast() abort
+function! treesitter#show_ast() abort
   let lang = s:ft_to_lang()
   if empty(lang)
     echo 'ts_helper: unknown language for filetype ' . &filetype
@@ -143,45 +240,29 @@ function! s:show_ast() abort
     echo 'ts_helper: empty AST or helper error'
     return
   endif
+  call s:transform_for_tree(data)
+  let data = [ data ]
+  let g:tree_struct = data
 
-  function! s:render_node(node, indent) abort
-    if type(a:node) == type({})
-      let sp = get(a:node, 'start_point', [0,0])
-      let ep = get(a:node, 'end_point', [0,0])
-      let t = printf('%s%s [%d:%d - %d:%d] %s',
-            \ repeat('  ', a:indent),
-            \ get(a:node, 'type', '<unknown>'),
-            \ sp[0] + 1,
-            \ sp[1],
-            \ ep[0] + 1,
-            \ ep[1],
-            \ get(a:node, 'text', ''))
-      let lines = [t]
-      if has_key(a:node, 'children')
-        for child in a:node.children
-          let lines += s:render_node(child, a:indent + 1)
-        endfor
-      endif
-      return lines
+  let l:tree_bufnr = treesitter_utils#find_tree_buffer()
+  if l:tree_bufnr == -1
+    let l:source_bufnr = bufnr('%')
+    vnew
+    let b:source_buffer = l:source_bufnr
+    call treesitter_tree#show_tree()
+  else
+    "TODO: Reload without need to close the tree buffer
+    " Switch to tree buffer
+    let l:tree_win = bufwinnr(l:tree_bufnr)
+    if l:tree_win == -1
+      execute 'vsplit | buffer' l:tree_bufnr
+    else
+      execute l:tree_win . 'wincmd w'
     endif
-    return []
-  endfunction
-
-  let lines = s:render_node(data, 0)
-  if empty(lines)
-    echo 'ts_helper: empty AST'
-    return
   endif
-  vnew
-  setlocal buftype=nofile
-  setlocal bufhidden=wipe
-  setlocal noswapfile
-  call setline(1, lines)
-  setlocal nomodifiable
-  file [ts-helper] AST
 endfunction
 
-function! s:select_node() abort
+function! treesitter#select_node() abort
   let lang = s:ft_to_lang()
   if empty(lang)
     echo 'ts_helper: unknown language for filetype ' . &filetype
@@ -283,7 +364,7 @@ function! s:build_fold_data() abort
         break
       endif
       " otherwise pop top (we've left that ancestor)
-      call remove(stack, -1)
+      let removed = remove(stack, -1)
     endwhile
 
     " Depth is stack size + 1 (top-level nodes have depth 1)
@@ -320,23 +401,31 @@ function! s:build_fold_data() abort
   endfor
 
   let values = uniq(sort(values(map(copy(s:fold_levels), 'Remove_prefixes(v:val)')), 'N'))
-
-  for key in keys(s:fold_levels)
-    let level = s:fold_levels[key]
-    let contains_init_fold = stridx(level, '>') == 0 
-    let contains_end_fold = stridx(level, '<') == 0 
-    if contains_init_fold || contains_end_fold
-      let level = Remove_prefixes(level)
-    endif
-    let prefix = ''
-    if contains_init_fold
-      let prefix = '>'
-    endif
-    if contains_end_fold
-      let prefix = '<'
-    endif
-    let s:fold_levels[key] = prefix . (index(values, level) + 1)   
+  let p = 1
+  for v in values
+    let p += 1
   endfor
+
+  let optimize = 0
+  if optimize
+    for key in keys(s:fold_levels)
+      let level = s:fold_levels[key]
+      let contains_init_fold = stridx(level, '>') == 0
+      let contains_end_fold = stridx(level, '<') == 0
+      if contains_init_fold || contains_end_fold
+        let level = Remove_prefixes(level)
+      endif
+      let flevel = index(values, level) + 1
+      let prefix = ''
+      if contains_init_fold
+        let prefix = '>'
+      endif
+      if contains_end_fold
+        let prefix = '<'
+      endif
+      let s:fold_levels[key] = prefix . flevel
+    endfor
+  endif
 
   " Save to buffer-local map for foldexpr to consult
   let b:ts_helper_fold_levels = copy(s:fold_levels)
@@ -370,7 +459,7 @@ command! TSHDisableFolds call s:disable_folds()
 " Symbol navigation (synchronous)
 " ------------------------
 
-function! s:goto_symbol(next) abort
+function! treesitter#goto_symbol(next) abort
   let lang = s:ft_to_lang()
   if empty(lang)
     echo 'ts_helper: unknown language for filetype ' . &filetype
@@ -419,33 +508,7 @@ function! s:goto_symbol(next) abort
   endif
 endfunction
 
-" Commands for AST/selection/navigation
-command! TSHShowAST call s:show_ast()
-command! TSHSelectNode call s:select_node()
-command! TSHNextSym call s:goto_symbol(1)
-command! TSHPrevSym call s:goto_symbol(0)
-
-"" default keymaps (optional)
-"if !exists('g:ts_helper_keymaps') || g:ts_helper_keymaps
-"  nnoremap <silent> <leader>ta :TSHShowAST<CR>
-"  nnoremap <silent> <leader>ts :TSHSelectNode<CR>
-"  nnoremap <silent> <leader>tn :TSHNextSym<CR>
-"  nnoremap <silent> <leader>tp :TSHPrevSym<CR>
-"endif
-
-" Auto-build folds on read if enabled
-if !exists('g:ts_helper_auto_folds')
-  let g:ts_helper_auto_folds = 1
-endif
-
-if g:ts_helper_auto_folds
-  augroup ts_helper_folds
-    autocmd!
-    autocmd BufReadPost,BufNewFile * if empty(&filetype) | else | call s:maybe_build_folds() | endif
-  augroup END
-endif
-
-function! s:maybe_build_folds() abort
+function! treesitter#maybe_build_folds() abort
   " avoid running on the helper script buffer itself
   if expand('%:p') =~# 'ts_helper.py$'
     return
