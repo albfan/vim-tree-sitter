@@ -209,7 +209,7 @@ function! s:select_node() abort
 endfunction
 
 function! Remove_prefixes(value)
-  return substitute(a:value, '^(<|>)', '', '')
+  return substitute(a:value, '^\(<\|>\)', '', '')
 endfunction
 
 function! s:build_fold_data() abort
@@ -319,7 +319,7 @@ function! s:build_fold_data() abort
     call add(stack, n)
   endfor
 
-  let values = uniq(sort(values(map(copy(s:fold_levels), 'Remove_prefixes(v:val)')), 'n'))
+  let values = uniq(sort(values(map(copy(s:fold_levels), 'Remove_prefixes(v:val)')), 'N'))
 
   for key in keys(s:fold_levels)
     let level = s:fold_levels[key]
