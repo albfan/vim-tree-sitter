@@ -11,7 +11,7 @@ This plugin is experimental, is encouraged to use neovim tree-sitter plugin impl
 - :TSHShowAST — open a scratch vertical split showing the AST for the current buffer
 - :TSHSelectNode — visually select the smallest named tree-sitter node under the cursor
 - :TSHNextSym / :TSHPrevSym — jump to the next / previous function/class-like symbol
-
+- :TSHShowLevels — Show fold level assigned for each line (dinamically reacts to fold events or wrapping
 
 ## Requirements (simple)
 - Vim 8.x
